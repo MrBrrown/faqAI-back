@@ -1,22 +1,52 @@
-from fastapi import APIRouter, status
+from fastapi import APIRouter, status, HTTPException
+from pathlib import Path
+from typing import Dict, Any
+from app.database import update_data_base, query_rag
 
-router = APIRouter(prefix="/chats", tags=["Chats"])
+router = APIRouter()
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
-async def create_chat():
-    return {"msg": "Created"}
+BASE_DIR = Path(__file__).parent.parent.parent
+DATA_PATH = BASE_DIR / "data"
+DB_PATH = BASE_DIR / "chroma"
 
-@router.get("/{chat_id}", status_code=status.HTTP_200_OK)
-async def get_chat(chat_id: int) -> dict:
-    return {"chat_id": chat_id}
+@router.get(
+    "/update",
+    status_code=status.HTTP_200_OK,
+    summary="Updating the database",
+    operation_id="update_faq_database"
+)
+def update_database():
+    try:
+        success = update_data_base(str(DB_PATH), str(DATA_PATH))
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database update failed"
+            )
+        return {"message": "Database updated successfully"}
+    except Exception as ex:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(ex)
+        )
 
-@router.put("/{chat_id}", status_code=status.HTTP_200_OK)
-async def edit_chat(chat_id: int, message: str) -> dict:
-    return {
-        "chat_id": chat_id,
-        "message": message
-    }
-    
-@router.delete("/{chat_id}", status_code=status.HTTP_200_OK)
-async def delete_chat(chat_id: int) -> dict:
-    return {"msg": f"chat {chat_id} was deleted!"}
+@router.get(
+    "/ask",
+    status_code=status.HTTP_200_OK,
+    summary="Поиск ответа в FAQ",
+    operation_id="search_faq"
+)
+def ask_question(question: str) -> Dict[str, Any]:
+    try:
+        results = query_rag(str(DB_PATH), question)
+        if not results:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No results found"
+            )
+        return {"results": results}
+    except Exception as ex:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(ex)
+        )
