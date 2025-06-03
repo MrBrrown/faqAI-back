@@ -8,6 +8,7 @@ from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
 from app.database.get_embedding_function import get_embedding_function
+from app.gpt.yandex import call_yandex_gpt
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
@@ -50,12 +51,13 @@ async def reload_data_base(db_path: str, data_path: str):
     print(f"\nReload complete. All chunks added: {added}\n")
 
 
+
 async def query_rag(
     db_path: str,
     query: str,
     collection_name: str = "token-kb",
     n_results: int = 5
-) -> list[dict]:
+) -> dict:
     client = chromadb.PersistentClient(path=db_path)
 
     collection = await asyncio.get_event_loop().run_in_executor(
@@ -68,18 +70,29 @@ async def query_rag(
         partial(collection.query, query_texts=[query], n_results=n_results)
     )
 
-    return [
-        {
-            "id": result_id,
-            "document": document,
-            "metadata": metadata
-        }
-        for result_id, document, metadata in zip(
-            results["ids"][0],
-            results["documents"][0],
-            results["metadatas"][0]
-        )
-    ]
+    documents = results["documents"][0]
+    context = "\n\n".join(documents)
+
+    prompt = f"Ответь на вопрос на основе контекста.\n\nКонтекст:\n{context}\n\nВопрос:\n{query}"
+
+    answer = await call_yandex_gpt(prompt)
+
+    return {
+        "answer": answer,
+        "context": context,
+        "results": [
+            {
+                "id": result_id,
+                "document": document,
+                "metadata": metadata
+            }
+            for result_id, document, metadata in zip(
+                results["ids"][0],
+                results["documents"][0],
+                results["metadatas"][0]
+            )
+        ]
+    }
 
 
 async def add_documents_to_collection(collection, data: list[dict], skip_existing: bool = True) -> tuple[int, int]:

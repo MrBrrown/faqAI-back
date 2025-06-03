@@ -1,7 +1,7 @@
 from fastapi import APIRouter, status, HTTPException
 from pathlib import Path
 from typing import Dict, Any
-from app.database import update_data_base, query_rag
+from app.database import update_data_base, query_rag, reload_data_base
 
 import traceback
 
@@ -34,14 +34,23 @@ async def update_database():
 async def ask_question(question: str) -> Dict[str, Any]:
     try:
         results = await query_rag(str(DB_PATH), question)
-        if not results:
+        if not results["results"]:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No results found"
             )
-        return {"results": results}
+        return results
     except Exception as ex:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(ex)
         )
+
+@router.post("/reload")
+async def reload_database():
+    try:
+        await reload_data_base(str(DB_PATH), str(DATA_PATH))
+        return {"status": "ok", "message": "Database reloaded"}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"500: Database reload failed\n{str(e)}")
