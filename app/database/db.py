@@ -1,43 +1,56 @@
 import os
 import yaml
-from tqdm import tqdm
+import asyncio
+import aiofiles
+from tqdm.asyncio import tqdm
 import chromadb
+from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 
 from app.database.get_embedding_function import get_embedding_function
 
-
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 100
+executor = ThreadPoolExecutor()
 
 
-def update_data_base(db_path: str, data_path: str):
+async def update_data_base(db_path: str, data_path: str):
     client = chromadb.PersistentClient(path=db_path)
-    collection = client.get_or_create_collection("token-kb", embedding_function=get_embedding_function())
-    data = load_data(data_path)
+    collection = await asyncio.get_event_loop().run_in_executor(
+        executor,
+        partial(client.get_or_create_collection, "token-kb", embedding_function=get_embedding_function())
+    )
+    data = await load_data(data_path)
 
     print(f"\nDocuments found: {len(data)}\n")
-    added, skipped = add_documents_to_collection(collection, data)
+    added, skipped = await add_documents_to_collection(collection, data)
     print(f"\nUpdate complete. Added: {added}, Skipped (already exists): {skipped}\n")
 
 
-def reload_data_base(db_path: str, data_path: str):
+async def reload_data_base(db_path: str, data_path: str):
     os.makedirs(db_path, exist_ok=True)
     client = chromadb.PersistentClient(path=db_path)
 
     try:
-        client.delete_collection("token-kb")
+        await asyncio.get_event_loop().run_in_executor(
+            executor,
+            partial(client.delete_collection, "token-kb")
+        )
     except Exception:
         pass
 
-    collection = client.get_or_create_collection("token-kb", embedding_function=get_embedding_function())
-    data = load_data(data_path)
+    collection = await asyncio.get_event_loop().run_in_executor(
+        executor,
+        partial(client.get_or_create_collection, "token-kb", embedding_function=get_embedding_function())
+    )
+    data = await load_data(data_path)
 
     print(f"\nDocuments found: {len(data)}\n")
-    added, _ = add_documents_to_collection(collection, data, skip_existing=False)
+    added, _ = await add_documents_to_collection(collection, data, skip_existing=False)
     print(f"\nReload complete. All chunks added: {added}\n")
 
 
-def query_rag(
+async def query_rag(
     db_path: str,
     query: str,
     collection_name: str = "token-kb",
@@ -45,14 +58,14 @@ def query_rag(
 ) -> list[dict]:
     client = chromadb.PersistentClient(path=db_path)
 
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        embedding_function=get_embedding_function(),
+    collection = await asyncio.get_event_loop().run_in_executor(
+        executor,
+        partial(client.get_or_create_collection, name=collection_name, embedding_function=get_embedding_function())
     )
 
-    results = collection.query(
-        query_texts=[query],
-        n_results=n_results
+    results = await asyncio.get_event_loop().run_in_executor(
+        executor,
+        partial(collection.query, query_texts=[query], n_results=n_results)
     )
 
     return [
@@ -69,11 +82,11 @@ def query_rag(
     ]
 
 
-def add_documents_to_collection(collection, data: list[dict], skip_existing: bool = True) -> tuple[int, int]:
+async def add_documents_to_collection(collection, data: list[dict], skip_existing: bool = True) -> tuple[int, int]:
     added = 0
     skipped = 0
 
-    for doc in tqdm(data, desc="Processing documents", unit="doc"):
+    async for doc in tqdm_async(data, desc="Processing documents", unit="doc"):
         chunks = split_text_into_chunks(doc["text"])
         doc_location = doc["location"]
 
@@ -81,37 +94,45 @@ def add_documents_to_collection(collection, data: list[dict], skip_existing: boo
             uid = f'{doc_location}_{idx}'
 
             if skip_existing:
-                existing = collection.get(ids=[uid])
+                existing = await asyncio.get_event_loop().run_in_executor(
+                    executor, partial(collection.get, ids=[uid])
+                )
                 if existing['ids']:
                     skipped += 1
                     continue
 
-            collection.add(
-                documents=[chunk],
-                metadatas=[{
-                    "source": doc["source"],
-                    "location": doc["location"],
-                    "type": doc["type"],
-                    "chunk_index": idx
-                }],
-                ids=[uid]
+            await asyncio.get_event_loop().run_in_executor(
+                executor,
+                partial(
+                    collection.add,
+                    documents=[chunk],
+                    metadatas=[{
+                        "source": doc["source"],
+                        "location": doc["location"],
+                        "type": doc["type"],
+                        "chunk_index": idx
+                    }],
+                    ids=[uid]
+                )
             )
             added += 1
 
     return added, skipped
 
 
-def load_data(data_path: str) -> list[dict]:
+async def load_data(data_path: str) -> list[dict]:
     root_path = os.path.join(data_path, "root.yaml")
-    with open(root_path, "r", encoding="utf-8") as f:
-        root_config = yaml.safe_load(f)
+    async with aiofiles.open(root_path, "r", encoding="utf-8") as f:
+        root_content = await f.read()
+        root_config = yaml.safe_load(root_content)
 
     all_docs = []
 
     for import_file in root_config.get("imports", []):
         import_path = os.path.join(data_path, import_file)
-        with open(import_path, "r", encoding="utf-8") as f:
-            import_config = yaml.safe_load(f)
+        async with aiofiles.open(import_path, "r", encoding="utf-8") as f:
+            import_content = await f.read()
+            import_config = yaml.safe_load(import_content)
 
         docs = import_config.get("docs", {})
         for doc_info in docs.values():
@@ -124,8 +145,8 @@ def load_data(data_path: str) -> list[dict]:
                 print(f"File not found: {full_path}")
                 continue
 
-            with open(full_path, "r", encoding="utf-8") as tf:
-                text = tf.read()
+            async with aiofiles.open(full_path, "r", encoding="utf-8") as tf:
+                text = await tf.read()
 
             all_docs.append({
                 "source": source_file,
@@ -148,7 +169,20 @@ def split_text_into_chunks(text: str, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERL
     return chunks
 
 
+async def tqdm_async(iterable, **kwargs):
+    """Wrapper for tqdm with async support."""
+    for item in tqdm(iterable, **kwargs):
+        yield item
+        await asyncio.sleep(0)
+
+
 if __name__ == "__main__":
-    pass
-    #print(query_rag("../../chroma", "ЦФА - что это"))
-    #update_data_base("../../chroma", "../../data")
+    import sys
+
+    async def main():
+        # Пример запуска:
+        # await update_data_base("../../chroma", "../../data")
+        # print(await query_rag("../../chroma", "ЦФА - что это"))
+        pass
+
+    asyncio.run(main())
