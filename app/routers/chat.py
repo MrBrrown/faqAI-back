@@ -2,6 +2,7 @@ from fastapi import APIRouter, status, HTTPException
 from pathlib import Path
 from typing import Dict, Any
 from app.database import update_data_base, query_rag, reload_data_base
+from app.gpt.yandex import call_yandex_gpt
 
 import traceback
 
@@ -34,17 +35,31 @@ async def update_database():
 async def ask_question(question: str) -> Dict[str, Any]:
     try:
         results = await query_rag(str(DB_PATH), question)
-        if not results["results"]:
+        if not results:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="No results found"
             )
-        return results
+
+        context = "\n\n".join([r["document"] for r in results])
+
+        prompt = f"Ответь на вопрос на основе контекста.\n\nКонтекст:\n{context}\n\nВопрос:\n{question}"
+
+        answer = await call_yandex_gpt(prompt)
+
+        return {
+            "question": question,
+            "answer": answer,
+            "context": context,
+            "raw_results": results
+        }
+
     except Exception as ex:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(ex)
         )
+
 
 @router.post("/reload")
 async def reload_database():
