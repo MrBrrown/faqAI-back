@@ -1,5 +1,4 @@
-from fastapi import APIRouter, status, HTTPException
-from pathlib import Path
+from fastapi import APIRouter, status
 from typing import Dict, Any
 from app.database import update_data_base, query_rag, reload_data_base
 from app.gpt.yandex import call_yandex_gpt
@@ -8,9 +7,8 @@ import traceback
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent.parent
-DATA_PATH = BASE_DIR / "data"
-DB_PATH = BASE_DIR / "chroma"
+DATA_PATH = "data"
+DB_PATH = "chroma"
 
 from fastapi import APIRouter, HTTPException
 
